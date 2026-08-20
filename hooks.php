@@ -1,111 +1,165 @@
-
 <?php
-define ('SS_ksf_payment_destinations', 111<<8);
-	/**************NOTE**********************************
-	 * Using DISPLAY_* causes the next screen (print receipt etc) to not appear.  This is due to the AJAX - going to next screen
-	 * using a URL redirect nukes the messages!  See line 465 in sales_order_entry.php
-	 * **************************************************/
+declare(strict_types=1);
 
-/***************************************************************************************
+define('SS_ksf_FA_PaymentDestinations', 111 << 8);
+
+$autoload = dirname(__FILE__) . '/vendor/autoload.php';
+if (file_exists($autoload)) {
+    require_once $autoload;
+}
+
+/**
+ * Payment Destinations — redirect non-cash payments to per-type GL accounts.
  *
- * Hooks is what adds menus, etc to FrontAccounting.
- * It also appears to be called pre and post database transactions
- * for certain modules (see includes/hooks.inc) around line 360
- * 	hook_db_prewrite
- * 	hook_db_postwrite
- * 	hook_db_prevoid
+ * Intercepts ST_SALESINVOICE via db_prewrite, rewrites pos_account to the
+ * bank account mapped to the current payment term, and forces cash_sale=1
+ * so FA auto-generates a customer payment alongside the invoice.
  *
- * Looks like we could also provide our own authentication module
- * 	hook_authenticate (useful for REST?)
- *
- * ***********************************************************************************/
-class hooks_ksf_payment_destinations extends hooks {
-	var $module_name = 'ksf_payment_destinations'; 
+ * The mapping table 0_ksf_payment_destinations links FA payment_terms IDs
+ * to FA bank_accounts IDs.
+ */
+class hooks_ksf_FA_PaymentDestinations extends hooks
+{
+    var $module_name = 'ksf_FA_PaymentDestinations';
+    var $version     = '2.0.0';
 
-	/*
-		Install additonal menu options provided by module
-	*/
-	function install_options($app) {
-		switch($app->id) {
-			case 'GL':
-			//case 'system':
-			//case 'stock':
-			//case 'AP':
-			case 'orders':
-			//case 'stock':
-				$app->add_rapp_function(2, _('ksf_payment_destinations'), 
-					 'modules/ksf_payment_destinations/ksf_payment_destinations.php', 'SA_ksf_payment_destinations');
-		}
-	}
+    public function getModuleConstants(&$data, $opts = null)
+    {
+        $constants = [
+            'KSF_PAYMENT_DESTINATIONS_MODULE' => $this->module_name,
+        ];
+        $data['constants'] = $constants;
+        return $constants;
+    }
 
-	function install_access()
-	{
-		$security_sections[SS_ksf_payment_destinations] = _("ksf_payment_destinations");
+    public function getModuleCapabilities(&$data, $opts = null)
+    {
+        $capabilities = [
+            'payment_redirect' => [
+                'description' => 'Redirect non-cash payments to per-type GL accounts via db_prewrite',
+                'methods'     => ['db_prewrite'],
+            ],
+        ];
+        $data['capabilities'] = $capabilities;
+        return $capabilities;
+    }
 
-		$security_areas['SA_ksf_payment_destinations'] = array(SS_ksf_payment_destinations|101, _("ksf_payment_destinations"));
+    public function hasCapability(&$data, $opts = null)
+    {
+        $capability = $opts['capability'] ?? $data['capability'] ?? null;
+        if ($capability === null) {
+            $data['has_capability'] = false;
+            return false;
+        }
+        $has = in_array($capability, ['payment_redirect']);
+        $data['has_capability'] = $has;
+        return $has;
+    }
 
-		return array($security_areas, $security_sections);
-	}
-	/**************NOTE**********************************
-	 * Using DISPLAY_* causes the next screen (print receipt etc) to not appear.  This is due to the AJAX - going to next screen
-	 * using a URL redirect nukes the messages!  See line 465 in sales_order_entry.php
-	 * **************************************************/
-	function db_prewrite(&$cart, $trans_type)
-	{
-		//display_notification( __FILE__ . ":" . __LINE__  );
-		//Want to trap payment types so we can post to an account like cash does
-		//type 30 == sales_order
-		//type 13 == delivery
-		//type 10 == invoice
-		//type 12 == payment
-		//If we are on a direct invoice, we will do a 30->13->10 and then ->12 if cash_sales set to one
-		if( $trans_type === ST_SALESINVOICE )
-		{
-			//display_notification( __FILE__ . ":" . __LINE__ . ":: trans_type = " . $trans_type );
-			//Match the payment type (e.g. Dream) to the appropriate bank account
-			if( require_once( 'class.ksf_payment_destinations_model.php' ) )
-			{
-				//display_notification( __FILE__ . ":" . __LINE__  );
-				$pay = new ksf_payment_destinations_model( ksf_payment_destinations_PREFS, $this );
-				$pay->set_var( "payment_term", $cart->payment_terms['terms_indicator'] );	//Primary Key
-				$old = $cart->pos['pos_account'];
-				//display_notification( __FILE__ . ":" . __LINE__ . " Terms: " . $cart->payment_terms['terms_indicator'] . " and Account: " . $cart->pos['pos_account'] . " And CASH SALE: " . $cart->payment_terms['cash_sale'] );
-				try {
-					//display_notification( __FILE__ . ":" . __LINE__  );
-					$pay->select_row();	//Primary Key is set.
-					$cart->pos['pos_account'] = $pay->get( "bank_account" );
-				} catch( Exception $e )
-				{
-					//display_notification( __FILE__ . ":" . __LINE__  );
-					//var_dump( $pay );
-					if( KSF_FIELD_NOT_SET == $e->getCode() )
-					{
-						//the bank_account does not match a config in our module so no redirect
-						if( FALSE != strpos( $e->getMessage(), "bank_account" ) )
-							return true;
-					}
-					else
-						display_error( __METHOD__ . ":" . __LINE__ . " " . $e->getMessage() );
-				}
-				if( ! $cart->payment_terms['cash_sale'] )
-				{
-					//Generate a payment
-					//display_notification( __FILE__ . ":" . __LINE__  );
-					$cart->payment_terms['cash_sale'] = 1;
-				}
-				//display_notification( __FILE__ . ":" . __LINE__ . "NEW Terms: " . $cart->payment_terms['terms_indicator'] . " and Account: " . $cart->pos['pos_account'] . " And CASH SALE: " . $cart->payment_terms['cash_sale'] );
-				return true;
-			}
-			else
-			{
-				//display_notification( __FILE__ . ":" . __LINE__ . "Didn't require_once model file" );
-			}
+    public function respondToCapabilityRequest(&$data, $opts = null)
+    {
+        $request = $opts['request'] ?? $data['request'] ?? 'capabilities';
+        switch ($request) {
+            case 'capabilities':
+                return $this->getModuleCapabilities($data, $opts);
+            case 'constants':
+                return $this->getModuleConstants($data, $opts);
+            case (strpos($request, 'has:') === 0):
+                return $this->hasCapability($data, ['capability' => substr($request, 4)]);
+            default:
+                return null;
+        }
+    }
 
-		}
-		else
-		{
-			//display_notification( __FILE__ . ":" . __LINE__ . ":: trans_type != SALESINVOICE:: " . $trans_type . " NOT touching anything!!" );
-		}
+    function install_options($app)
+    {
+        switch ($app->id) {
+            case 'GL':
+            case 'orders':
+                $app->add_rapp_function(
+                    2,
+                    _('Payment Destinations'),
+                    'modules/FA_PaymentDestinations/ksf_payment_destinations.php',
+                    'SA_ksf_FA_PaymentDestinations'
+                );
+        }
+    }
 
-	}
+    function install_access()
+    {
+        global $security_sections, $security_areas;
+
+        $security_sections[SS_ksf_FA_PaymentDestinations] = _("Payment Destinations");
+
+        $security_areas['SA_ksf_FA_PaymentDestinations'] = [
+            SS_ksf_FA_PaymentDestinations | 108,
+            _("Payment Destinations")
+        ];
+        $security_areas['SA_ksf_FA_PaymentDestinationsVIEW'] = [
+            SS_ksf_FA_PaymentDestinations | 1,
+            _("View Payment Destinations")
+        ];
+
+        return [$security_areas, $security_sections];
+    }
+
+    function activate_extension($company, $check_only = true)
+    {
+        $updates = [];
+        if (file_exists(dirname(__FILE__) . '/sql/install.sql')) {
+            $updates['install.sql'] = [$this->module_name];
+        }
+        if (!empty($updates)) {
+            return $this->update_databases($company, $updates, $check_only);
+        }
+        return true;
+    }
+
+    /**
+     * Intercept ST_SALESINVOICE before write.
+     *
+     * FA direct-invoice lifecycle: Sales Order (30) → Delivery (13) → Invoice (10) → Payment (12).
+     * The Payment step only fires if cash_sale=1.
+     *
+     * This hook:
+     * 1. Looks up the payment term in 0_ksf_payment_destinations
+     * 2. If found: rewrites $cart->pos['pos_account'] to the mapped bank account
+     * 3. Forces cash_sale=1 so FA auto-generates a customer payment
+     *
+     * For Square-Invoice destinations (square_invoice*), ksf_FA_Square's db_prewrite
+     * should fire FIRST and set cash_sale=0 to suppress the auto-payment.
+     */
+    function db_prewrite(&$cart, $trans_type)
+    {
+        if ($trans_type !== ST_SALESINVOICE) {
+            return;
+        }
+
+        if (!isset($cart->payment_terms['terms_indicator'])) {
+            return;
+        }
+
+        require_once(__DIR__ . '/class.ksf_payment_destinations_model.php');
+
+        $pay = new ksf_payment_destinations_model(ksf_payment_destinations_PREFS, $this);
+        $pay->set_var('payment_term', $cart->payment_terms['terms_indicator']);
+
+        try {
+            $pay->select_row();
+            $cart->pos['pos_account'] = $pay->get('bank_account');
+        } catch (\Exception $e) {
+            if (KSF_FIELD_NOT_SET == $e->getCode()) {
+                // No mapping for this payment term — let FA handle it normally
+                return true;
+            }
+            display_error(__METHOD__ . ":" . __LINE__ . " " . $e->getMessage());
+            return true;
+        }
+
+        if (!$cart->payment_terms['cash_sale']) {
+            $cart->payment_terms['cash_sale'] = 1;
+        }
+
+        return true;
+    }
 }

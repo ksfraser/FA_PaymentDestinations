@@ -1,3 +1,5 @@
 <?php
-define('ksf_payment_destinations_PREFS', 'ksf_payment_destinations_prefs' );
-define('ksf_payment_destinations_HELP', 'Allow direct invoice to generate customer payments into appropriate accounts for other payments than cash' );
+declare(strict_types=1);
+
+define('ksf_payment_destinations_PREFS', 'ksf_payment_destinations_prefs');
+define('ksf_payment_destinations_HELP', 'Map payment terms to bank accounts for per-type GL posting');
