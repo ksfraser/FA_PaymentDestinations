@@ -102,6 +102,28 @@ ownership.
 
 ---
 
+### BR-PD-004: GL Mismatch Visibility
+
+**Statement**: When staged transactions are matched to existing FA
+transactions during import review, the system SHALL compare GL accounts
+and flag mismatches as advisory warnings.
+
+**Rationale**: PaymentDestinations routes GL posting based on payment
+terms. Importing modules have their own GL config (e.g., `square_gl`).
+If these differ for the same transaction, the mismatch indicates a
+reconciliation issue that needs visibility.
+
+**Acceptance Criteria**:
+- ISU compares staged GL vs FA GL during match phase
+- Mismatch flagged visually in review UI
+- Advisory only — does not block processing
+- This module does not participate directly; ISU performs comparison
+  using data from both PaymentDestinations routing and importing module config
+
+**Related FRs**: FR-07
+
+---
+
 ## 4. Functional Requirements Mapping
 
 | FR | BR | Description |
@@ -110,6 +132,8 @@ ownership.
 | FR-PD-002-001 | BR-PD-002 | db_prewrite hook (intercept, lookup, rewrite, force cash_sale) |
 | FR-PD-003-001 | BR-PD-001 | Module activation (install SQL, menu, security) |
 | FR-PD-004-001 | BR-PD-003 | Inter-module communication (4 standard methods) |
+| FR-PD-005-001 | BR-PD-003 | Square-Invoice term decoupling (no handling of square_invoice* terms) |
+| FR-PD-006-001 | BR-PD-003 | Hook execution order coordination with ksf_FA_Square |
 
 ---
 
@@ -144,3 +168,11 @@ FA writes invoice + auto-generated payment to GL
 | `cash_sale = 1` forcing | FA only auto-generates payments for cash sales; this suppresses the payment form |
 | Hook execution order dependency on ksf_FA_Square | FA runs hooks alphabetically by module name; `FA_PaymentDestinations` < `FA_Square` |
 | Single-table design | Simple mapping; no need for composite keys or history table |
+
+---
+
+## Version History
+
+| Version | Date | Author | Changes |
+|---------|------|--------|---------|
+| 2.1 | 2026-08-20 | KSFraser | Added BR-PD-004 (GL mismatch visibility) |

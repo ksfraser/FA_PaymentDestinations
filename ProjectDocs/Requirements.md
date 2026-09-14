@@ -133,6 +133,84 @@ constants.
 
 ---
 
+### FR-05: Square-Invoice Term Decoupling
+
+**Title:** Do not handle Square-Invoice payment terms
+
+**Description:** The module SHALL NOT intercept or handle Square-Invoice
+payment terms (`square_invoice`, `square_invoice_email`,
+`square_invoice_card`). These are owned exclusively by ksf_FA_Square.
+If this module's `db_prewrite` fires after ksf_FA_Square's and the
+payment term is a Square-Invoice term, this module SHALL find no
+mapping and take no action.
+
+**Acceptance Criteria:**
+
+1. Square-Invoice terms are NOT inserted into `0_ksf_payment_destinations`.
+2. If a Square-Invoice term accidentally has a mapping, this module's
+   hook still proceeds normally (no special-casing).
+3. No code in this module imports or references ksf_FA_Square.
+4. Hook execution order: FA runs hooks alphabetically by module name;
+   `FA_PaymentDestinations` < `FA_Square`, so Square's hook fires first.
+
+**Code references:**
+
+- `hooks.php:132-164` — `db_prewrite` (exits on `KSF_FIELD_NOT_SET`)
+
+---
+
+### FR-06: Hook Execution Order Coordination
+
+**Title:** Coordinate db_prewrite with ksf_FA_Square via hook order
+
+**Description:** When both ksf_FA_Square and FA_PaymentDestinations are
+installed, their `db_prewrite` hooks fire in alphabetical order by
+module name. ksf_FA_Square fires first, handles `square_invoice*` terms
+(cash_sale=0), and this module fires second, handles non-Square
+redirections (cash_sale=1). If ksf_FA_Square sets cash_sale=0 for a
+Square term, this module's hook should not override it.
+
+**Acceptance Criteria:**
+
+1. This module's `db_prewrite` only fires for `ST_SALESINVOICE`.
+2. If `terms_indicator` is not set, hook returns immediately.
+3. If no mapping exists, hook returns without error.
+4. This module never sets `cash_sale=0` (only Square does).
+
+---
+
+### FR-07: GL Mismatch Visibility in Import Review
+
+**Title:** Coordinate with ISU for GL mismatch detection during staged transaction review
+
+**Description:** When staged transactions (from Square, WooCommerce, etc.)
+are matched to existing FA transactions during the ISU review/match
+phase, the system SHALL compare GL accounts. If the GL account on the
+staged transaction (from the importing module's config, e.g., `square_gl`)
+differs from the GL account on the existing FA transaction (potentially
+routed by this module's PaymentDestinations mapping), the mismatch SHALL
+be flagged as an advisory warning in the review UI.
+
+**Acceptance Criteria:**
+
+1. ISU's `findMatchingTransactions()` and related match methods compare
+   GL accounts between staged and matched FA transactions.
+2. The staged GL comes from the importing module's config (e.g., Square's
+   `square_gl` setting).
+3. The FA GL comes from `gl_trans` for the matched transaction.
+4. Mismatch is displayed as a visual warning (icon/text) on the match row.
+5. Mismatch is advisory only — does not block processing.
+6. This module does NOT participate directly in mismatch detection;
+   the comparison is performed by ISU using data from both this module's
+   routing and the importing module's config.
+
+**Code references:**
+
+- ISU `class.ksf_import_square.php` — match display methods
+- ISU `class.ksf_import_square_transactions_model.php` — match queries
+
+---
+
 ## 3. Non-Functional Requirements
 
 | ID | Requirement |
@@ -145,3 +223,12 @@ constants.
 | NFR-06 | TDD workflow — all new code backed by PHPUnit tests with 100% coverage target |
 | NFR-07 | PHPDoc standards — `@param`, `@return`, `@throws`, `@since` required on all public methods |
 | NFR-08 | No secrets or keys in code or config |
+
+---
+
+## Version History
+
+| Version | Date | Author | Changes |
+|---------|------|--------|---------|
+| 2.0 | 2026-08-20 | KSFraser | Initial requirements with FR-01 through FR-06 |
+| 2.1 | 2026-08-20 | KSFraser | Added FR-07 (GL mismatch visibility in import review) |
